@@ -2,11 +2,20 @@ from flask import Flask, send_from_directory, request
 import os
 from werkzeug.utils import secure_filename
 
-path = "C:\\Users\\Chucky\\flask\\venv\\code\\gcodes"
-front = "C:\\Users\\Chucky\\flask\\venv\\code\\front"
+# path = "C:\\Users\\Chucky\\flask\\venv\\printerserver\\gcodes"
+# front = "C:\\Users\\Chucky\\flask\\venv\\printerserver\\front"
+
+path = "/home/pi/printerserver/upload"
+front = "/home/pi/printerserver/front"
+
+ALLOWED_EXTENSIONS = {'gcode', 'stl', 'obj'}
 app = Flask(__name__)
 
 app.config['UPLOAD_FOLDER'] = path
+
+def allowed_file(filename):
+    return '.' in filename and \
+           filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
 @app.route("/files")
 def return_files():
@@ -20,12 +29,9 @@ def return_files():
     return output
     # return list(walk(path))
 
-def allowed_file(filename):
-    return '.' in filename and filename.rsplit('.', 1)[1].lower() in {'gcode'}
-
 @app.route('/upload', methods=['GET', 'POST'])
 def upload_file():
-    if request.method == 'POST' and 'file' in request.files and request.files['file'].filename is not "":
+    if request.method == 'POST' and 'file' in request.files and request.files['file'].filename != "":
         # if 'file' not in request.files:
         #     print('No file part')
         file = request.files['file']
@@ -36,13 +42,9 @@ def upload_file():
             file.save(os.path.join(app.config['UPLOAD_FOLDER'], filename))
         return {"uploaded" : filename}
 
-@app.route("/print")
-def print():
-    pass
-
 @app.route("/")
 def frontend():
-    return send_from_directory(front, "test.html")
+    return send_from_directory(front, "index.html")
 
 @app.route('/<path:path>')
 def send_report(path):
