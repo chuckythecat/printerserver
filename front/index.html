@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html>
+    <head>
+        <!-- <link rel="stylesheet" href="test.css"> -->
+        <script src="jquery-3.6.3.js" defer></script>
+        <script src="/js.cookie.js" defer></script>
+        <script src="main.js" defer></script>
+    </head>
+    <body>
+        <input type="file" id="fileupload" multiple />
+        <button id="submit">Upload</button>
+
+        <div style="border: 1px solid black; padding: 10px; user-select: none;" id="spoiler">Show settings</div>
+        <div style="display: none;" id="settings">
+            <label for="p1file">Printer 1 device file</label>
+            <input type="text" name="p1file" id="p1file" />
+    
+            <label for="p1video">Printer 1 MJPEG stream</label>
+            <input type="text" name="p1video" id="p1video" />
+    
+            <button id="apply">Apply changes</button>    
+        </div>
+        <div id="p1camera"></div>
+        </div>
+    </body>
+</html>
