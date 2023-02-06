@@ -8,14 +8,20 @@ from werkzeug.utils import secure_filename
 path = "/home/pi/printerserver/upload"
 front = "/home/pi/printerserver/front"
 
-ALLOWED_EXTENSIONS = {'gcode', 'stl', 'obj'}
+slice_extensions = {'stl', 'obj'}
+print_extensions = {'gcode'}
+
 app = Flask(__name__)
 
 app.config['UPLOAD_FOLDER'] = path
 
-def allowed_file(filename):
-    return '.' in filename and \
-           filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+def check_extension(filename):
+    extension = '.' in filename and filename.rsplit('.', 1)[1].lower()
+    if extension in slice_extensions:
+        return 1
+    elif extension in print_extensions:
+        return 2
+    return False
 
 @app.route("/files")
 def return_files():
@@ -37,9 +43,16 @@ def upload_file():
         file = request.files['file']
         # if file.filename == '':
         #     print('No selected file')
-        if file and allowed_file(file.filename):
+        if file:
             filename = secure_filename(file.filename)
-            file.save(os.path.join(app.config['UPLOAD_FOLDER'], filename))
+            if check_extension(file.filename) == 1:
+                print(f'Received {filename}, needs slicing before printing')
+            elif check_extension(file.filename) == 2:
+                print(f'Received {filename}, sending to {request.form.get("target")}')
+                # file.save(os.path.join(app.config['UPLOAD_FOLDER'], filename))
+            elif check_extension(file.filename) == False:
+                print(f'File {filename} extension is invalid')
+                return {"error" : "Only .stl, .obj and .gcode files are allowed"}
         return {"uploaded" : filename}
 
 @app.route("/")

@@ -1,8 +1,9 @@
 async function uploadFile() {
     let formData = new FormData();           
     formData.append("file", fileupload.files[0]);
+    formData.append("target", "/dev/ttyUSB0")
     resp = await fetch(`${window.location.origin}/upload`, {
-      method: "POST", 
+      method: "POST",
       body: formData
     });    
 }
