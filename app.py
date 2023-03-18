@@ -20,7 +20,7 @@ front = "/home/pi/printerserver/front"
 slice_extensions = {'stl', 'obj'}
 print_extensions = {'gcode'}
 
-config = json.loads(open("config1.json").read())
+config = json.loads(open("config.json").read())
 printers = {}
 gcodes = {}
 
