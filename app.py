@@ -1,4 +1,5 @@
-from flask import Flask, send_from_directory, request, Response
+from flask import Flask, make_response, send_from_directory, request, Response
+from flask_cors import cross_origin
 import os
 from werkzeug.utils import secure_filename
 from printrun.printcore import printcore
@@ -7,14 +8,24 @@ import time
 import json
 import cv2
 from sys import platform
-if platform == "win32": exit(0)
+if platform == "win32":
+    print("Windows не поддерживается")
+    exit(0)
+
+if os.geteuid() != 0:
+    print("Для запуска сервера нужны привилегии администратора. Запустите сервер при помощи команды sudo")
+    exit(0)
+
+debug = False
+save_files = True
+send_files = False
 
 timeout = 60
 
-# path = "C:\\Users\\Chucky\\flask\\venv\\printerserver\\gcodes"
+# models = "C:\\Users\\Chucky\\flask\\venv\\printerserver\\gcodes"
 # front = "C:\\Users\\Chucky\\flask\\venv\\printerserver\\front"
 
-path = "/home/pi/printerserver/upload"
+models = "/home/pi/printerserver/upload"
 front = "/home/pi/printerserver/front"
 
 slice_extensions = {'stl', 'obj'}
@@ -25,10 +36,10 @@ printers = {}
 gcodes = {}
 
 for device in os.listdir("/dev"):
-    if "ttyUSB" in device and type(device) is str:
+    if "ttyUSB" in device or "ttyACM" in device and type(device) is str:
         printers["/dev/" + device] = {"name": "Unknown", "configured": False, "printcore": printcore("/dev/" + device, 115200)}
 
-print(f"Found {len(printers.keys())} USB serial devices")
+print(f"Найдено {len(printers.keys())} USB устройств с последовательным портом")
 
 
 class MyHandler():
@@ -46,30 +57,33 @@ class MyHandler():
 
   def on_printsend(a, b):
     pass
-  
+
   def on_start(a, b):
-    print("started print")
+    print("Начал печатать")
 
   def on_end(a):
-    print("ended print")
+    print("Печать закончена")
 
   def on_preprintsend(a, b, c, d):
     pass
+  
+  def on_error():
+    print("Ошибка!")
 
   def on_recv(self, recieved):
     if not "ok" in recieved:
-      print(f'{self.device}: "{recieved}"')
-      if "M115" in self.last:
+      if debug: print(f'{self.device}: "{recieved}"')
+      if "M115" in self.last and not "Cap" in recieved:
         detected = False
         for name, fwline in self.cfg.items():
           if fwline in recieved:
-            print(f"Recognized {name} on {self.device}")
+            print(f"Опознан {name} на {self.device}")
             self.printer["configured"] = True
             self.printer["name"] = name
             detected = True
             break
         if detected is False:
-          print(f"{self.device} is present but not recognized. Please add device in config.json file.")
+          print(f"{self.device} найден но не опознан. Пожалуйста добавьте информацию об устройстве в конфигурационный файл config.json")
           print(f'M115: "{recieved}"')
 
 notonline = []
@@ -87,7 +101,7 @@ while not allonline:
     offlines = ""
     timer += 5
     if timeout - timer <= 0:
-      print(f"Printer(s) not responding for more than {timeout} seconds, proceeding without them")
+      print(f"Устройство(а) не отвечают больше {timeout} секунд, запускаю сервер без них")
       print(notonline)
       for offline in notonline:
         del printers[offline]
@@ -97,7 +111,7 @@ while not allonline:
       notonline.remove(offline)
       if len(notonline) != 0:
         offlines += ", "
-    print("Waiting for: " + offlines)
+    print("Ожидание устройств(а): " + offlines)
     time.sleep(5)
 
 for printer in printers:
@@ -110,15 +124,10 @@ cam.set(cv2.CAP_PROP_FPS, 15)
 
 app = Flask(__name__)
 
-app.config['UPLOAD_FOLDER'] = path
+app.config['UPLOAD_FOLDER'] = models
 
-def check_extension(filename):
-    extension = '.' in filename and filename.rsplit('.', 1)[1].lower()
-    if extension in slice_extensions:
-        return 1
-    elif extension in print_extensions:
-        return 2
-    return False
+def return_extension(filename):
+    return '.' in filename and filename.rsplit('.', 1)[1].lower()
 
 def gather_img():
     while True:
@@ -130,10 +139,10 @@ def gather_img():
 @app.route("/files")
 def return_files():
     output = {}
-    for dir in os.walk(path):
+    for dir in os.walk(models):
         # output[dir[0].replace("\\", r"\ "[0])] = [dir[1], dir[2]]
         a = dir[0].replace("\\", "/")
-        a = a.replace(path.replace("\\", "/"), "")
+        a = a.replace(models.replace("\\", "/"), "")
         a = "/" if a == "" else a
         output[a] = [dir[1], dir[2]]
     return output
@@ -157,37 +166,93 @@ def mjpeg():
 @app.route('/upload', methods=['GET', 'POST'])
 def upload_file():
     if request.method == 'POST' and 'file' in request.files and request.files['file'].filename != "":
-        # if 'file' not in request.files:
-        #     print('No file part')
         file = request.files['file']
-        # if file.filename == '':
-        #     print('No selected file')
         if file:
+            # protect from filename attacks (hopefully)
             filename = secure_filename(file.filename)
-            if check_extension(file.filename) == 1:
-                print(f'Received {filename}, needs slicing before printing')
-            elif check_extension(file.filename) == 2:
-                print(f"Received {filename}")
-                filename = os.path.join(app.config['UPLOAD_FOLDER'], filename)
-                file.save(filename)
-                # gcode = [i.strip() for i in open(filename)]
-                # gcode = gcoder.LightGCode(gcode)
+
+            print(f"Получен файл {filename}")
+            
+            # compose full path
+            filename = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+
+            # check extension
+            extension = return_extension(file.filename)
+            print(extension)
+            
+            # check if gcode
+            if extension == "obj" or extension == "stl":
+                print(f'Ожидаю gcode от слайсера')
+
+                # save file
+                if save_files: file.save(filename)
+            elif extension == "gcode":
+                # check target device
                 printer = request.form.get("target")
-                gcodes[printer] = [i.strip() for i in open(filename)]
-                gcodes[printer] = gcoder.LightGCode(gcodes[printer])
-                print(f'Sending to {request.form.get("target")}')
-                printers[printer]["printcore"].startprint(gcodes[printer])
-            elif check_extension(file.filename) == False:
-                print(f'File {filename} extension is invalid')
-                return {"error" : "Only .stl, .obj and .gcode files are allowed"}
-        return {"uploaded" : filename}
+
+                # server side device check
+                if printer in printers:
+                    # save file
+                    if save_files: file.save(filename)
+
+                    # load gcode
+                    gcodes[printer] = [i.strip() for i in open(filename)]
+                    gcodes[printer] = gcoder.LightGCode(gcodes[printer])
+                    
+                    # send to corresponding device
+                    print(f'Отправляю на {request.form.get("target")}')
+                    if send_files: printers[printer]["printcore"].startprint(gcodes[printer])
+            else:
+                print(f'Расширение файла {filename} не подходит')
+                return {"error" : "Разрешены только расширения файлов: .stl, .obj and .gcode"}
+        return {"uploaded" : file.filename}
 
 @app.route("/")
 def frontend():
-    return send_from_directory(front, "index.html")
+    resp = make_response(send_from_directory(front, "index.html"))
+    resp.headers['Cross-Origin-Embedder-Policy'] = 'require-corp'
+    resp.headers['Cross-Origin-Opener-Policy'] = 'same-origin'
+    # resp.headers['Cross-Origin-Resource-Policy'] = 'cross-origin'
+    return resp
+
+@app.route('/file/<path:path>', methods=['GET', 'OPTIONS'])
+def send_model(path):
+    print(request.headers)
+    if request.method == "OPTIONS": # CORS preflight
+        resp = make_response()
+        try:
+            resp.headers.add("Access-Control-Allow-Origin", request.headers['Origin'])
+            resp.headers.add('Access-Control-Allow-Headers', request.headers['Access-Control-Request-Headers'])
+            resp.headers.add('Access-Control-Allow-Methods', request.headers['Access-Control-Request-Method'])
+            resp.headers.add('Access-Control-Allow-Credentials', "true")
+        except KeyError:
+            pass
+    elif request.method == "GET": # The actual request following the preflight
+        try:
+            resp = make_response(send_from_directory(models, path))
+            resp.headers.add("Access-Control-Allow-Origin", request.headers['Origin'])
+            resp.headers.add('Access-Control-Allow-Credentials', "true")
+        except KeyError:
+            pass
+    return resp
 
 @app.route('/<path:path>')
-def send_report(path):
-    return send_from_directory(front, path)
+def send_front(path):
+    resp = make_response(send_from_directory(front, path))
+    resp.headers['Cross-Origin-Resource-Policy'] = 'cross-origin'
+    return resp
 
-app.run(host='0.0.0.0', port=80, threaded=True)
+@app.route("/src/main/gapp.js")
+def main_gapp():
+   return send_from_directory(front, "gapp.js")
+
+@app.route("/src/kiri-run/frame.js")
+def kiri_run_frame():
+   return send_from_directory(front, "frame.js")
+
+# app.run(host='0.0.0.0', port=1111, threaded=True, ssl_context=('cert.pem', 'key.pem'))
+
+# http
+# app.run(host='0.0.0.0', port=80, threaded=True)
+# https
+app.run(host='0.0.0.0', port=443, threaded=True, ssl_context=('cert.pem', 'key.pem'))
