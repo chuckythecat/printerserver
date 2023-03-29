@@ -1,74 +1,105 @@
+let debug = true;
+
+let gridapps_server = "http://192.168.1.2:8888/"; // оставляйте "/" в конце URL!
+let ipcamera_server = "http://192.168.1.201:80/videostream.cgi?user=admin&amp;pwd=888888";
+
+
+function getProtocolFromURL(URL) {return URL.split("//").shift();}
+
+if( !(window.location.protocol == getProtocolFromURL(gridapps_server) == getProtocolFromURL(ipcamera_server)) ) {
+    console.warn("warning: mismatched protocols");
+}
+
+let missedTrain = true;
+
 // console.warn("parent:")
 // console.warn(`window.SharedArrayBuffer: ${window.SharedArrayBuffer}`);
 // console.warn(`isSecureContext: ${isSecureContext}`);
 // console.warn(`crossOriginIsolated: ${crossOriginIsolated}`);
 
-let missedTrain = true;
+window.addEventListener('message', msg => {
+    if(debug) {
+        const { origin, source, target, data } = msg;
+        console.warn("parent: new message:");
+        console.warn(`parent: origin: ${origin}`);
+        if(data.event == "init-done") {
+            console.warn(`parent: data: ${JSON.stringify(data.event)}`);
+        } else {
+            console.warn(`parent: data: ${JSON.stringify(data)}`);
+        }
+    }
+});
 
-// window.addEventListener('message', msg => {
-//     const { origin, source, target, data } = msg;
-//     console.warn("parent: new message:");
-//     console.warn(`parent: origin: ${origin}`);
-//     if(data.event == "init-done") {
-//         console.warn(`parent: data: ${JSON.stringify(data.event)}`);
-//     } else {
-//         console.warn(`parent: data: ${JSON.stringify(data)}`);
-//     }
-// });
+// $("body").prepend(`
+//     <div style="display: flex;">
+//         <img src="${ipcamera_server}" style="width: 640px; height: 360px;" width="640" vspace="0" hspace="0" height="360">
+//         <img src="/mjpeg" style="width: 600px; height: 480px;">    
+//     </div>
+// `);
 
-async function handleFile() {
-    let formData = new FormData();           
+async function uploadFile() {
+    filename = fileupload.files[0].name;
+    extension = filename.split('.').pop();
+    if(extension != "gcode") return;
+
+    let formData = new FormData();
     formData.append("file", fileupload.files[0]);
     formData.append("target", $("#printerselect").val())
-    fetch(`${window.location.origin}/upload`, {
+    await fetch(`${window.location.origin}/upload`, {
         method: "POST",
         body: formData
-    }).then((response) => response.json())
-    .then((responseJson) => {
-        if (responseJson.uploaded) {
-            filename = fileupload.files[0].name;
-            extension = filename.split('.').pop();
-            fullpath = window.location.href + "file/" + filename;
-
-            if (extension == "stl" || extension == "obj") {
-                console.log(`opening slicer with file ${fullpath}`);
-                $("body").prepend('<div id="fullscreen" style="position: absolute; width: 100vw; height: 100vh;"><iframe allow="cross-origin-isolated" style="width:100%; height:100%;" id="kiri" src="https://192.168.1.2:8888/kiri/"></iframe></div>');
-                api = kiri.frame;
-                api.setFrame("kiri", "*");
-                $("#kiri").on("load", () => {
-                    console.log("parent: onload");
-                    api.on("init-done", () => {
-                        missedTrain = false;
-                        console.log("parent: caught init-done");
-                        initializeSlicer();
-                    });
-                    setTimeout(() => {
-                        if(missedTrain) {
-                            console.log("parent: init-done fired before subscription");
-                            initializeSlicer();
-                        }
-                    }, 5000);
-                });
-            }
-        } else if(responseJson.error) {
-            console.log(responseJson.error);
-        };
     });
 }
 
-function initializeSlicer() {
-    api.alert("Загружаю 3D модель...", 2);
-    api.clear();
-    api.load(fullpath);
+$("#submit").click(() => {
+    uploadFile();
+});
+
+function openSlicer() {
+    $("body").prepend(`
+        <div id="fullscreen" style="position: absolute; width: 100vw; height: 100vh;">
+            <iframe allow="cross-origin-isolated" style="width:100%; height:100%;" id="kiri" src="${gridapps_server + "kiri/"}"></iframe>
+        </div>
+    `);
+    api = kiri.frame;
+    try {
+        api.setFrame("kiri", "*");
+        $("#kiri").on("load", () => {
+            if(debug) console.log("parent: onload");
+            api.on("init-done", () => {
+                missedTrain = false;
+                if(debug) console.log("parent: caught init-done");
+                attachSlicerHandlers();
+            });
+            setTimeout(() => {
+                // TODO: add slicer loaded check in case it
+                // takes longer than 5 seconds to load
+                if(missedTrain) {
+                    if(debug) console.log("parent: init-done fired before subscription");
+                    attachSlicerHandlers();
+                }
+            }, 5000);
+        });
+    } catch(error) {
+        console.log("Error opening slicer (is grid-apps server running?)");
+    }
+}
+
+$("#slicer").click(() => {
+    openSlicer();
+});
+
+function attachSlicerHandlers() {
     api.on("loaded", () => {
-        api.alert("Модель загружена успешно.", 2);
-        api.alert("Для подготовки модели к печати измените настройки и нажмите кнопку Slice в меню Start слева.", 10);
+        api.alert("Слайсер загружен успешно.", 2);
     });
     api.on("slice.end", () => {
         api.prepare();
     });
     api.on('preview.end', () => {
-        api.export(true);
+        // true sends export.done event
+        // instead of opening export window inside slicer
+        api.export(true); 
     });
     api.on('export.done', (data) => {
         api.alert("Модель успешно преобразована в gcode.", 5);
@@ -86,8 +117,4 @@ async function printerSelector() {
 
 $(document).ready(() => {
     printerSelector();
-});
-
-$("#submit").click(() => {
-    handleFile();
 });
