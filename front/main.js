@@ -37,13 +37,13 @@ window.addEventListener('message', msg => {
 //     </div>
 // `);
 
-async function uploadFile() {
-    filename = fileupload.files[0].name;
+async function uploadFile(file) {
+    filename = file.name;
     extension = filename.split('.').pop();
     if(extension != "gcode") return;
 
     let formData = new FormData();
-    formData.append("file", fileupload.files[0]);
+    formData.append("file", file);
     formData.append("target", $("#printerselect").val())
     await fetch(`${window.location.origin}/upload`, {
         method: "POST",
@@ -52,7 +52,7 @@ async function uploadFile() {
 }
 
 $("#submit").click(() => {
-    uploadFile();
+    uploadFile(fileupload.files[0]);
 });
 
 function openSlicer() {
@@ -102,9 +102,14 @@ function attachSlicerHandlers() {
         api.export(true); 
     });
     api.on('export.done', (data) => {
-        api.alert("Модель успешно преобразована в gcode.", 5);
+        api.alert("Модель успешно преобразована в gcode и отправлена на сервер.", 5);
         api.alert("Теперь вы можете закрыть окно слайсера.", 5);
         console.log(data);
+        //TODO: let user choose filename and target printer with pop-up window or sth
+        let file = new File([data], "test.gcode", {
+            type: "text/plain",
+        });
+        uploadFile(file);
     });
 }
 
