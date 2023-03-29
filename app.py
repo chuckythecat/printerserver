@@ -168,32 +168,23 @@ def upload_file():
     if request.method == 'POST' and 'file' in request.files and request.files['file'].filename != "":
         file = request.files['file']
         if file:
-            # protect from filename attacks (hopefully)
             filename = secure_filename(file.filename)
 
             print(f"Получен файл {filename}")
             
-            # compose full path
             filename = os.path.join(app.config['UPLOAD_FOLDER'], filename)
 
-            # check extension
             extension = return_extension(file.filename)
             
-            # check if gcode
             if extension == "gcode":
-                # check target device
                 printer = request.form.get("target")
 
-                # server side device check
                 if printer in printers:
-                    # save file
                     if save_files: file.save(filename)
 
-                    # load gcode
                     gcodes[printer] = [i.strip() for i in open(filename)]
                     gcodes[printer] = gcoder.LightGCode(gcodes[printer])
                     
-                    # send to corresponding device
                     print(f'Отправляю на {printer}')
                     if send_files: printers[printer]["printcore"].startprint(gcodes[printer])
                 else:
