@@ -16,9 +16,9 @@ if os.geteuid() != 0:
     print("Для запуска сервера нужны привилегии администратора. Запустите сервер при помощи команды sudo")
     exit(0)
 
-debug = False
-save_files = True
-send_files = False
+debug = False # показывать все полученные от устройств сообщения
+save_files = True # сохранение файлов (для тестирования)
+send_files = True # отправка файлов на принтер (для тестирования)
 
 timeout = 60
 
@@ -27,9 +27,6 @@ timeout = 60
 
 models = "/home/pi/printerserver/upload"
 front = "/home/pi/printerserver/front"
-
-slice_extensions = {'stl', 'obj'}
-print_extensions = {'gcode'}
 
 config = json.loads(open("config.json").read())
 printers = {}
@@ -159,6 +156,9 @@ def report_printers():
         response[printer] = tempval
     return response
 
+# TODO: mjpeg repeater from IP camera:
+# /mjpeg?camera=1 - USB camera
+# /mjpeg?camera=2 - repeater from IP camera to frontend
 @app.route("/mjpeg")
 def mjpeg():
     return Response(gather_img(), mimetype='multipart/x-mixed-replace; boundary=frame')
@@ -178,15 +178,9 @@ def upload_file():
 
             # check extension
             extension = return_extension(file.filename)
-            print(extension)
             
             # check if gcode
-            if extension == "obj" or extension == "stl":
-                print(f'Ожидаю gcode от слайсера')
-
-                # save file
-                if save_files: file.save(filename)
-            elif extension == "gcode":
+            if extension == "gcode":
                 # check target device
                 printer = request.form.get("target")
 
@@ -200,11 +194,17 @@ def upload_file():
                     gcodes[printer] = gcoder.LightGCode(gcodes[printer])
                     
                     # send to corresponding device
-                    print(f'Отправляю на {request.form.get("target")}')
+                    print(f'Отправляю на {printer}')
                     if send_files: printers[printer]["printcore"].startprint(gcodes[printer])
+                else:
+                   print(f"Файла устройства {printer} не существует")
+                   return {"error" : "Файла устройства не существует"}
+            elif extension == "obj" or extension == "stl":
+                print(f'Модели должны быть сконвертированы перед загрузкой')
+                return {"error" : "Сконвертируйте модель в gcode с помощью слайсера перед загрузкой"}
             else:
-                print(f'Расширение файла {filename} не подходит')
-                return {"error" : "Разрешены только расширения файлов: .stl, .obj and .gcode"}
+                print(f'Расширение файла не подходит')
+                return {"error" : "Разрешены только файлы gcode"}
         return {"uploaded" : file.filename}
 
 @app.route("/")
@@ -215,26 +215,26 @@ def frontend():
     # resp.headers['Cross-Origin-Resource-Policy'] = 'cross-origin'
     return resp
 
-@app.route('/file/<path:path>', methods=['GET', 'OPTIONS'])
-def send_model(path):
-    print(request.headers)
-    if request.method == "OPTIONS": # CORS preflight
-        resp = make_response()
-        try:
-            resp.headers.add("Access-Control-Allow-Origin", request.headers['Origin'])
-            resp.headers.add('Access-Control-Allow-Headers', request.headers['Access-Control-Request-Headers'])
-            resp.headers.add('Access-Control-Allow-Methods', request.headers['Access-Control-Request-Method'])
-            resp.headers.add('Access-Control-Allow-Credentials', "true")
-        except KeyError:
-            pass
-    elif request.method == "GET": # The actual request following the preflight
-        try:
-            resp = make_response(send_from_directory(models, path))
-            resp.headers.add("Access-Control-Allow-Origin", request.headers['Origin'])
-            resp.headers.add('Access-Control-Allow-Credentials', "true")
-        except KeyError:
-            pass
-    return resp
+# @app.route('/file/<path:path>', methods=['GET', 'OPTIONS'])
+# def send_model(path):
+#     print(request.headers)
+#     if request.method == "OPTIONS": # CORS preflight
+#         resp = make_response()
+#         try:
+#             resp.headers.add("Access-Control-Allow-Origin", request.headers['Origin'])
+#             resp.headers.add('Access-Control-Allow-Headers', request.headers['Access-Control-Request-Headers'])
+#             resp.headers.add('Access-Control-Allow-Methods', request.headers['Access-Control-Request-Method'])
+#             resp.headers.add('Access-Control-Allow-Credentials', "true")
+#         except KeyError:
+#             pass
+#     elif request.method == "GET": # The actual request following the preflight
+#         try:
+#             resp = make_response(send_from_directory(models, path))
+#             resp.headers.add("Access-Control-Allow-Origin", request.headers['Origin'])
+#             resp.headers.add('Access-Control-Allow-Credentials', "true")
+#         except KeyError:
+#             pass
+#     return resp
 
 @app.route('/<path:path>')
 def send_front(path):
@@ -242,6 +242,9 @@ def send_front(path):
     resp.headers['Cross-Origin-Resource-Policy'] = 'cross-origin'
     return resp
 
+# workaround: /code/frame.js on grid-apps server tries
+# to load /src/main/gapp.js and /src/kiri-run/frame.js
+# from this server instead of grid-apps server for some reason
 @app.route("/src/main/gapp.js")
 def main_gapp():
    return send_from_directory(front, "gapp.js")
@@ -253,6 +256,6 @@ def kiri_run_frame():
 # app.run(host='0.0.0.0', port=1111, threaded=True, ssl_context=('cert.pem', 'key.pem'))
 
 # http
-# app.run(host='0.0.0.0', port=80, threaded=True)
+app.run(host='0.0.0.0', port=80, threaded=True)
 # https
-app.run(host='0.0.0.0', port=443, threaded=True, ssl_context=('cert.pem', 'key.pem'))
+# app.run(host='0.0.0.0', port=443, threaded=True, ssl_context=('cert.pem', 'key.pem'))
