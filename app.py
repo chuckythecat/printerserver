@@ -64,8 +64,14 @@ class MyHandler():
   def on_preprintsend(a, b, c, d):
     pass
   
-  def on_error():
+  def on_error(self, err):
     print("Ошибка!")
+
+  def on_temp(self):
+    pass
+
+  def on_online(self):
+    pass
 
   def on_recv(self, recieved):
     if not "ok" in recieved:
