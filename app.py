@@ -25,8 +25,9 @@ timeout = 60
 # models = "C:\\Users\\Chucky\\flask\\venv\\printerserver\\gcodes"
 # front = "C:\\Users\\Chucky\\flask\\venv\\printerserver\\front"
 
-models = "/home/pi/printerserver/upload"
-front = "/home/pi/printerserver/front"
+cwd = os.getcwd()
+models = cwd + "/upload"
+front = cwd + "/front"
 
 config = json.loads(open("config.json").read())
 printers = {}
