@@ -79,11 +79,23 @@ class MyHandler():
       if debug: print(f'{self.device}: "{recieved}"')
       if "M115" in self.last and not "Cap" in recieved:
         detected = False
-        for name, fwline in self.cfg.items():
-          if fwline in recieved:
+        for name, settings in self.cfg.items():
+          if settings["UUID"] in recieved:
             print(f"Опознан {name} на {self.device}")
             self.printer["configured"] = True
             self.printer["name"] = name
+            if(not "CamType" in settings): self.cfg[name]["CamType"] = "None"
+            if(settings["CamType"] == "None"):
+                self.printer["camera"] = "None"
+            elif(settings["CamType"] == "USB"):
+                self.printer["camera"] = "/video?device=" + self.device.replace("/dev/", "")
+                index = int(settings["CamPath"].split("video")[1])
+                self.printer["cam"] = cv2.VideoCapture(index)
+                self.printer["cam"].set(cv2.CAP_PROP_FRAME_WIDTH, int(settings["CamWidth"]))
+                self.printer["cam"].set(cv2.CAP_PROP_FRAME_HEIGHT, int(settings["CamHeight"]))
+                self.printer["cam"].set(cv2.CAP_PROP_FPS, int(settings["CamFPS"]))
+            elif(settings["CamType"] == "Network"):
+                self.printer["camera"] = settings["CamPath"]
             detected = True
             break
         if detected is False:
@@ -121,24 +133,12 @@ while not allonline:
 for printer in printers:
   printers[printer]["printcore"].addEventHandler(MyHandler(printers[printer], config))
 
-cam = cv2.VideoCapture(0)
-cam.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-cam.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-cam.set(cv2.CAP_PROP_FPS, 15)
-
 app = Flask(__name__)
 
 app.config['UPLOAD_FOLDER'] = models
 
 def return_extension(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower()
-
-def gather_img():
-    while True:
-        time.sleep(0.1)
-        _, img = cam.read()
-        _, frame = cv2.imencode('.jpg', img)
-        yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + frame.tobytes() + b'\r\n')
 
 @app.route("/files")
 def return_files():
@@ -158,7 +158,7 @@ def report_printers():
     for printer, values in printers.copy().items():
         tempval = {}
         for key, value in values.items():
-            if key != "printcore":
+            if key != "printcore" and key != "cam":
                 tempval[key] = value
         response[printer] = tempval
     return response
@@ -166,9 +166,17 @@ def report_printers():
 # TODO: mjpeg repeater from IP camera:
 # /mjpeg?camera=1 - USB camera
 # /mjpeg?camera=2 - repeater from IP camera to frontend
-@app.route("/mjpeg")
+def gather_img(cam):
+    while True:
+        time.sleep(0.1)
+        _, img = cam.read()
+        _, frame = cv2.imencode('.jpg', img)
+        yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + frame.tobytes() + b'\r\n')
+
+@app.route("/video")
 def mjpeg():
-    return Response(gather_img(), mimetype='multipart/x-mixed-replace; boundary=frame')
+    camera = printers["/dev/" + request.args.get("device")]["cam"]
+    return Response(gather_img(camera), mimetype='multipart/x-mixed-replace; boundary=frame')
 
 @app.route('/upload', methods=['GET', 'POST'])
 def upload_file():
