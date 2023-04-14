@@ -1,5 +1,18 @@
 {
-    "EasyThreed Nano": "FIRMWARE_NAME:Marlin 1.1.0-RC3 From Archive SOURCE_CODE_URL:http:// ... PROTOCOL_VERSION:1.0 MACHINE_TYPE:3D Printer EXTRUDER_COUNT:1 UUID:00000000-0000-0000-0000-000000000000",
-    "Blue": "FIRMWARE_NAME:Marlin V1; Sprinter/grbl mashup for gen6 FIRMWARE_URL:http://www.mendel-parts.com PROTOCOL_VERSION:1.0 MACHINE_TYPE:Mendel EXTRUDER_COUNT:1",
-    "RAMPS": "UUID:ffec0f6d-e5ac-448a-b9a3-90016f3db7b8"
+    "EasyThreed Nano": {
+        "UUID": "FIRMWARE_NAME:Marlin 1.1.0-RC3 From Archive SOURCE_CODE_URL:http:// ... PROTOCOL_VERSION:1.0 MACHINE_TYPE:3D Printer EXTRUDER_COUNT:1 UUID:00000000-0000-0000-0000-000000000000"
+    },
+    "Blue": {
+        "UUID": "FIRMWARE_NAME:Marlin V1; Sprinter/grbl mashup for gen6 FIRMWARE_URL:http://www.mendel-parts.com PROTOCOL_VERSION:1.0 MACHINE_TYPE:Mendel EXTRUDER_COUNT:1",
+        "CamType": "Network",
+        "CamPath": "http://192.168.1.201:80/videostream.cgi?user=admin&amp;pwd=888888"
+    },
+    "RAMPS": {
+        "UUID": "UUID:ffec0f6d-e5ac-448a-b9a3-90016f3db7b8",
+        "CamType": "USB",
+        "CamPath": "/dev/video0",
+        "CamWidth": "640",
+        "CamHeight": "480",
+        "CamFPS": "15"
+    }
 }
