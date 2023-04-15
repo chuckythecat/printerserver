@@ -33,7 +33,7 @@ configfile = "config.json"
 # TODO: start new log every day
 # Настройки ведения журнала
 logfile = "printerserver.log" # Имя файла журнала
-dateformat = "%d-%m-%Y_%H:%M:%S" # Формат даты сообщений в журнале
+dateformat = "%d-%m-%Y_%H.%M.%S" # Формат даты сообщений в журнале
 # (также влияет на формат даты файлов видеофиксации)
 loglevel = logging.INFO # Минимальный уровень важности сообщений
 # Возможные значения: DEBUG, INFO, WARNING, ERROR, CRITICAL
