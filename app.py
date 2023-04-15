@@ -1,11 +1,13 @@
 from flask import Flask, make_response, send_from_directory, request, Response
 from flask_cors import cross_origin
 import os
+import signal
+import subprocess as subpr
 from werkzeug.utils import secure_filename
 from printrun.printcore import printcore
 from printrun.eventhandler import PrinterEventHandler
 from printrun import gcoder
-import logging as log
+import logging
 import time
 import json
 import cv2
@@ -15,8 +17,12 @@ if platform == "win32":
 	exit(0)
 
 if os.geteuid() != 0:
-	print("Для запуска сервера нужны привилегии администратора. Запустите сервер при помощи команды sudo")
+	print("Для запуска сервера нужны привилегии администратора. \
+				Запустите сервер при помощи команды sudo")
 	exit(0)
+
+# True - https, False - http
+secure = True
 
 # Записывать видео с камеры, даже когда устройство не занимается работой
 alwaysrecord = False
@@ -24,12 +30,12 @@ alwaysrecord = False
 # Имя конфигурационного файла
 configfile = "config.json"
 
-#TODO: start new log every day
+# TODO: start new log every day
 # Настройки ведения журнала
 logfile = "printerserver.log" # Имя файла журнала
 dateformat = "%d-%m-%Y_%H:%M:%S" # Формат даты сообщений в журнале
 # (также влияет на формат даты файлов видеофиксации)
-loglevel = log.INFO # Минимальный уровень важности сообщений
+loglevel = logging.INFO # Минимальный уровень важности сообщений
 # Возможные значения: DEBUG, INFO, WARNING, ERROR, CRITICAL
 # Все сообщения с уровнем важности правее
 # от выставленного также попадают в журнал
@@ -45,12 +51,14 @@ timeout = 60
 # models = "C:\\Users\\Chucky\\flask\\venv\\printerserver\\gcodes"
 # front = "C:\\Users\\Chucky\\flask\\venv\\printerserver\\front"
 
-log.basicConfig(
-    filename = logfile,
-    encoding = 'utf-8',
-    format = '%(asctime)s %(levelname)-8s %(message)s',
-    level = loglevel,
-    datefmt = dateformat)
+log = logging.getLogger(__name__)
+log.propagate = False
+log.setLevel(loglevel)
+loghandler = logging.FileHandler(filename = logfile, encoding = 'utf-8')
+logformatter = logging.Formatter(fmt = '%(asctime)s %(levelname)-8s %(message)s',
+																	datefmt = dateformat)
+loghandler.setFormatter(logformatter)
+log.addHandler(loghandler)
 
 log.info("Начало работы сервера")
 
@@ -75,6 +83,7 @@ class DeviceHandler(PrinterEventHandler):
 		self.devicepath = printer["printcore"].port
 		self.devicename = self.devicepath.replace("/dev/", "")
 		self.cfg = cfg
+		self.name = "Unknown"
 		self.last = None
 		self.fatalerror = False
 		self.ffmpeg = None
@@ -95,10 +104,27 @@ class DeviceHandler(PrinterEventHandler):
 		else: 
 			print("Начал печатать")
 			log.info(f"Устройство {self.devicepath} начало печать")
+			if(self.printer["configured"] and self.printer["camera"] != "None"):
+				camtype = self.cfg[self.name]["CamType"]
+				if(camtype == "Network"): device = self.printer["camera"]
+				# ffmpeg can't record from /dev/video directly if camera is being
+				# streamed to frontend
+				elif(camtype == "USB"): device = ("https" if secure else "http") + "://localhost" + self.printer["camera"]
+				# TODO: different devices can take same devicename between server reboots
+				# recordings from different devices' cameras can end up in same directory
+				ffmpeg = f'ffmpeg -i {device} -loglevel error -framerate 1 -strftime 1 "{cwd}/{self.devicename}/{dateformat}.jpg"'
+				print(device)
+				print(ffmpeg)
+				# TODO: output stderr to subpr.PIPE and log ffmpeg errors to logger
+				self.ffmpeg = subpr.Popen(ffmpeg, shell=True, preexec_fn=os.setsid, stdout=subpr.DEVNULL)
+
 
 	def on_end(self):
 		print("Печать закончена")
 		log.info(f"Устройство {self.devicepath} закончило печать")
+		if(self.ffmpeg):
+			os.killpg(os.getpgid(self.ffmpeg.pid), signal.SIGTERM)
+			self.ffmpeg = None
 	
 	def on_error(self, error):
 		# if("M999" in error): 
@@ -122,13 +148,14 @@ class DeviceHandler(PrinterEventHandler):
 						log.info(found)
 						self.printer["configured"] = True
 						self.printer["name"] = name
+						self.name = name
 						if(not "CamType" in settings): self.cfg[name]["CamType"] = "None"
 						if(settings["CamType"] == "None"):
 							self.printer["camera"] = "None"
 						elif(settings["CamType"] == "USB"):
 							self.printer["camera"] = "/video?device=" + self.devicename
-							index = int(settings["CamPath"].split("video")[1])
-							self.printer["cam"] = cv2.VideoCapture(index)
+							self.cameradevice = settings["CamPath"]
+							self.printer["cam"] = cv2.VideoCapture(int(self.cameradevice.split("video")[1]))
 							self.printer["cam"].set(cv2.CAP_PROP_FRAME_WIDTH, int(settings["CamWidth"]))
 							self.printer["cam"].set(cv2.CAP_PROP_FRAME_HEIGHT, int(settings["CamHeight"]))
 							self.printer["cam"].set(cv2.CAP_PROP_FPS, int(settings["CamFPS"]))
@@ -138,7 +165,8 @@ class DeviceHandler(PrinterEventHandler):
 						break
 				if detected is False:
 					log.error(f"{self.devicepath} найден но не сконфигурирован в файле {configfile}")
-					print(f"{self.devicepath} найден но не опознан. Пожалуйста добавьте информацию об устройстве в конфигурационный файл config.json")
+					print(f"{self.devicepath} найден но не опознан. \
+					Пожалуйста добавьте информацию об устройстве в конфигурационный файл config.json")
 					print(f'M115: "{recieved}"')
 
 for device in os.listdir("/dev"):
@@ -222,12 +250,12 @@ def gather_img(cam):
 @app.route("/video")
 def mjpeg():
 	camera = printers["/dev/" + request.args.get("device")]["cam"]
-	return Response(gather_img(camera), mimetype='multipart/x-mixed-replace; boundary=frame')
+	return Response(gather_img(camera), mimetype = 'multipart/x-mixed-replace; boundary=frame')
 
 def return_extension(filename):
 	return '.' in filename and filename.rsplit('.', 1)[1].lower()
 
-@app.route('/upload', methods=['GET', 'POST'])
+@app.route('/upload', methods = ['GET', 'POST'])
 def upload_file():
 	if request.method == 'POST' and 'file' in request.files and request.files['file'].filename != "":
 		file = request.files['file']
@@ -314,7 +342,5 @@ def kiri_run_frame():
 
 # app.run(host='0.0.0.0', port=1111, threaded=True, ssl_context=('cert.pem', 'key.pem'))
 
-# http
-app.run(host='0.0.0.0', port=80, threaded=True)
-# https
-# app.run(host='0.0.0.0', port=443, threaded=True, ssl_context=('cert.pem', 'key.pem'))
+if(secure): app.run(host = '0.0.0.0', port = 443, threaded = True, ssl_context = ('cert.pem', 'key.pem'))
+else: app.run(host = '0.0.0.0', port = 80, threaded = True)
