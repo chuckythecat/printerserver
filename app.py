@@ -8,6 +8,7 @@ from printrun.printcore import printcore
 from printrun.eventhandler import PrinterEventHandler
 from printrun import gcoder
 import logging
+from logging.handlers import TimedRotatingFileHandler
 import time
 import json
 import cv2
@@ -21,6 +22,8 @@ if os.geteuid() != 0:
 				Запустите сервер при помощи команды sudo")
 	exit(0)
 
+# TODO: move all configuration to separate json (ini?) file
+
 # True - https, False - http
 secure = True
 
@@ -30,11 +33,14 @@ alwaysrecord = False
 # Имя конфигурационного файла
 configfile = "config.json"
 
-# TODO: start new log every day
 # Настройки ведения журнала
-logfile = "printerserver.log" # Имя файла журнала
-dateformat = "%d-%m-%Y_%H.%M.%S" # Формат даты сообщений в журнале
-# (также влияет на формат даты файлов видеофиксации)
+logfilename = "printerserver.log" # Имя файла журнала
+# (в конец добавляется дата файла журнала)
+
+dateformat = "%d-%m-%Y" # Формат даты сообщений в названии файлов журналов
+timeformat = "%H.%M.%S" # Формат времени сообщений в журнале
+# (также влияют на формат даты и времени в названии файлов видеозаписи)
+
 loglevel = logging.INFO # Минимальный уровень важности сообщений
 # Возможные значения: DEBUG, INFO, WARNING, ERROR, CRITICAL
 # Все сообщения с уровнем важности правее
@@ -42,7 +48,15 @@ loglevel = logging.INFO # Минимальный уровень важности
 # Например: Если выставлен уровень INFO, все сообщения уровня
 # WARNING, ERROR и CRITICAL также будут записываться в журнал
 
-debug = False # показывать все полученные от устройств сообщения
+maxfiles = 30 # Максимальное количество дней записей в журнал
+# по достижению максимального количества старые файлы журнала
+# будут удалены автоматически
+
+# Минимальный уровень важности сообщений для вывода в консоль
+streamlevel = logging.DEBUG
+
+devicedebug = False # показывать все посылаемые устройствам
+# и полученные от устройств сообщения
 save_files = True # сохранение файлов (для тестирования)
 send_files = True # отправка файлов на принтер (для тестирования)
 
@@ -51,27 +65,39 @@ timeout = 60
 # models = "C:\\Users\\Chucky\\flask\\venv\\printerserver\\gcodes"
 # front = "C:\\Users\\Chucky\\flask\\venv\\printerserver\\front"
 
-log = logging.getLogger(__name__)
-log.propagate = False
-log.setLevel(loglevel)
-loghandler = logging.FileHandler(filename = logfile, encoding = 'utf-8')
-logformatter = logging.Formatter(fmt = '%(asctime)s %(levelname)-8s %(message)s',
-																	datefmt = dateformat)
-loghandler.setFormatter(logformatter)
-log.addHandler(loghandler)
-
-log.info("Начало работы сервера")
-
 cwd = os.getcwd()
 models = cwd + "/upload"
 front = cwd + "/front"
 
+log = logging.getLogger(__name__)
+log.propagate = False
+log.setLevel(logging.DEBUG)
+logformatter = logging.Formatter(
+	fmt = '%(asctime)s %(levelname)-8s %(message)s',
+	datefmt = timeformat)
+
+# filehandler = logging.FileHandler(filename = logfile, encoding = 'utf-8')
+filehandler = TimedRotatingFileHandler(
+	filename = cwd + "/logs/" + logfilename,
+	encoding = 'utf-8',
+	when = "midnight",
+	backupCount = maxfiles)
+filehandler.suffix = dateformat
+filehandler.setLevel(loglevel)
+filehandler.setFormatter(logformatter)
+log.addHandler(filehandler)
+
+streamhandler = logging.StreamHandler()
+streamhandler.setLevel(streamlevel)
+streamhandler.setFormatter(logformatter)
+log.addHandler(streamhandler)
+
+log.info("Начало работы сервера")
+
 try:
 	config = json.loads(open(configfile).read())
 except:
-	err = f"Конфигурационный файл {configfile} не может быть загружен!"
-	print(err)
-	log.critical(err)
+	log.critical(f"Конфигурационный файл {configfile} не может быть загружен!")
 	exit(0)
 
 printers = {}
@@ -91,7 +117,7 @@ class DeviceHandler(PrinterEventHandler):
 
 	def on_send(self, command, gline):
 		self.last = command
-		log.debug(f'Команда "{command}" послана устройству "{self.devicepath}"')
+		if(devicedebug): log.debug(f'Команда "{command}" послана устройству "{self.devicepath}"')
 
 	def on_online(self):
 		log.info(f"{self.devicepath} онлайн")
@@ -99,10 +125,8 @@ class DeviceHandler(PrinterEventHandler):
 
 	def on_start(self, resume):
 		if(resume): 
-			print("Печать возобновлена")
 			log.info(f"Устройство {self.devicepath} возобновило печать")
-		else: 
-			print("Начал печатать")
+		else:
 			log.info(f"Устройство {self.devicepath} начало печать")
 			if(self.printer["configured"] and self.printer["camera"] != "None"):
 				camtype = self.cfg[self.name]["CamType"]
@@ -112,15 +136,17 @@ class DeviceHandler(PrinterEventHandler):
 				elif(camtype == "USB"): device = ("https" if secure else "http") + "://localhost" + self.printer["camera"]
 				# TODO: different devices can take same devicename between server reboots
 				# recordings from different devices' cameras can end up in same directory
-				ffmpeg = f'ffmpeg -i {device} -loglevel error -framerate 1 -strftime 1 "{cwd}/{self.devicename}/{dateformat}.jpg"'
-				print(device)
-				print(ffmpeg)
+				ffmpeg = f'ffmpeg -i {device} -loglevel error -framerate 1 -strftime 1 "{cwd}/{self.devicename}/{dateformat}_{timeformat}.jpg"'
+				log.debug(ffmpeg)
 				# TODO: output stderr to subpr.PIPE and log ffmpeg errors to logger
-				self.ffmpeg = subpr.Popen(ffmpeg, shell=True, preexec_fn=os.setsid, stdout=subpr.DEVNULL)
+				self.ffmpeg = subpr.Popen(
+					ffmpeg,
+					shell=True,
+					preexec_fn=os.setsid,
+					stdout=subpr.DEVNULL)
 
 
 	def on_end(self):
-		print("Печать закончена")
 		log.info(f"Устройство {self.devicepath} закончило печать")
 		if(self.ffmpeg):
 			os.killpg(os.getpgid(self.ffmpeg.pid), signal.SIGTERM)
@@ -129,23 +155,18 @@ class DeviceHandler(PrinterEventHandler):
 	def on_error(self, error):
 		# if("M999" in error): 
 		# 	self.fatalerror = True
-		# 	print(f"Критическая ошибка! Устройство {self.devicepath} не может продолжить работу!")
 		#	log.critical(f"Устройство {self.devicepath} не может продолжить работу ввиду критической ошибки!")
 		#	log.critical(error)
-		print(f"Ошибка устройства {self.devicepath}: {error}")
-		log.error(f"{self.devicepath}: {error}")
+		log.error(f"Ошибка устройства {self.devicepath}: {error}")
 
 	def on_recv(self, recieved):
 		if not "ok" in recieved:
-			# if debug: print(f'{self.devicepath}: "{recieved}"')
-			log.debug(f'{self.devicepath}: "{recieved}"')
-			if not self.fatalerror and "FIRMWARE_NAME:" in recieved and not "Cap" in recieved:
+			if(devicedebug): log.debug(f'{self.devicepath}: "{recieved}"')
+			if not self.fatalerror and "FIRMWARE_NAME:" in recieved:
 				detected = False
 				for name, settings in self.cfg.items():
 					if settings["UUID"] in recieved:
-						found = f"Опознан {name} на {self.devicepath}"
-						print(found)
-						log.info(found)
+						log.info(f"Опознан {name} на {self.devicepath}")
 						self.printer["configured"] = True
 						self.printer["name"] = name
 						self.name = name
@@ -165,9 +186,8 @@ class DeviceHandler(PrinterEventHandler):
 						break
 				if detected is False:
 					log.error(f"{self.devicepath} найден но не сконфигурирован в файле {configfile}")
-					print(f"{self.devicepath} найден но не опознан. \
-					Пожалуйста добавьте информацию об устройстве в конфигурационный файл config.json")
-					print(f'M115: "{recieved}"')
+					log.debug("Пожалуйста добавьте информацию об устройстве в конфигурационный файл config.json")
+					log.debug(f'M115: "{recieved}"')
 
 for device in os.listdir("/dev"):
 	if "ttyUSB" in device or "ttyACM" in device:
@@ -177,7 +197,7 @@ for device in os.listdir("/dev"):
 		core.addEventHandler(DeviceHandler(printers[fulldevice], config))
 
 
-print(f"Найдено {len(printers.keys())} USB устройств с последовательным портом")
+log.info(f"Найдено {len(printers.keys())} USB устройств с последовательным портом")
 
 
 # TODO: rewrite waiting for device logic
@@ -196,8 +216,7 @@ while not allonline:
 		offlines = ""
 		timer += 5
 		if timeout - timer <= 0:
-			print(f"Устройство(а) не отвечают больше {timeout} секунд, запускаю сервер без них")
-			print(notonline)
+			log.warning(f"Устройство(а) {notonline} не отвечают больше {timeout} секунд, запускаю сервер без них")
 			for offline in notonline:
 				del printers[offline]
 			break
@@ -206,7 +225,7 @@ while not allonline:
 			notonline.remove(offline)
 			if len(notonline) != 0:
 				offlines += ", "
-		print("Ожидание устройств(а): " + offlines)
+		log.debug("Ожидание устройств(а): " + offlines)
 		time.sleep(5)
 
 # for printer in printers:
@@ -262,7 +281,7 @@ def upload_file():
 		if file:
 			filename = secure_filename(file.filename)
 
-			print(f"Получен файл {filename}")
+			log.debug(f"Получен файл {filename}")
 
 			filename = os.path.join(app.config['UPLOAD_FOLDER'], filename)
 
@@ -277,19 +296,16 @@ def upload_file():
 					gcodes[printer] = [i.strip() for i in open(filename)]
 					gcodes[printer] = gcoder.LightGCode(gcodes[printer])
 					
-					print(f'Отправляю на {printer}')
+					log.debug(f'Отправляю на {printer}')
 					log.info(f"Файл {filename} отправлен на {printer}")
 					if send_files: printers[printer]["printcore"].startprint(gcodes[printer])
 				else:
-					print(f"Файла устройства {printer} не существует")
-					log.error(f"Получен файл {filename}, но устройства {printer}")
+					log.error(f"Получен файл {filename}, но устройства {printer} не существует")
 					return {"error" : "Файла устройства не существует"}
 			elif extension == "obj" or extension == "stl":
-					print(f'Модели должны быть сконвертированы перед загрузкой')
 					log.error(f"Получен ненарезанный файл 3D модели {filename}")
 					return {"error" : "Сконвертируйте модель в gcode с помощью слайсера перед загрузкой"}
 			else:
-					print(f'Расширение файла не подходит')
 					log.error(f"Получен файл {filename} недопустимого расширения")
 					return {"error" : "Разрешены только файлы gcode"}
 		return {"uploaded" : file.filename}
